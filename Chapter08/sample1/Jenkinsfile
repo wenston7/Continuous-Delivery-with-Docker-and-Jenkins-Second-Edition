@@ -9,9 +9,15 @@ pipeline {
                     sh "./gradlew compileJava"
                }
           }
+          stage("Unit test") {
+               steps {
+                    sh "./gradlew test"
+               }
+          }
           stage("Code coverage") {
                steps {
-                    sh "./gradlew test jacocoTestReport jacocoTestCoverageVerification"
+                    sh "./gradlew jacocoTestReport"
+                    sh "./gradlew jacocoTestCoverageVerification"
                }
           }
           stage("Static code analysis") {
@@ -19,6 +25,30 @@ pipeline {
                     sh "./gradlew checkstyleMain"
                }
           }
+
+	  stage('Run Checkstyle') {
+               steps {
+                    // This command tells Jenkins to execute the Gradle checkstyle task
+                    sh './gradlew checkstyleTest' 
+               }
+          }
+
+
+	  stage('Publish Report') {
+               steps {
+                    // This uses the HTML Publisher plugin to make the report visible in Jenkins
+                    publishHTML(target: [
+                         allowMissing: false,
+                         alwaysLinkToLastBuild: true,
+                         keepAll: true,
+                         reportDir: 'build/reports/checkstyle', // Standard output folder for Gradle checkstyle
+                         reportFiles: 'test.html', 
+                         reportName: 'jacoco checkstyle' // Name required by your instructions
+                    ])
+               }
+          }
+
+
           stage("Package") {
                steps {
                     sh "./gradlew build"
