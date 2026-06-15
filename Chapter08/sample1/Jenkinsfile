@@ -11,25 +11,25 @@ pipeline {
           }
           stage("Unit test") {
                steps {
-                    sh "./gradlew test"
+                    sh "cd Chapter08/sample1 && ./gradlew test"
                }
           }
           stage("Code coverage") {
                steps {
-                    sh "./gradlew jacocoTestReport"
-                    sh "./gradlew jacocoTestCoverageVerification"
+                    sh "cd Chapter08/sample1 && ./gradlew jacocoTestReport"
+                    sh "cd Chapter08/sample1 && ./gradlew jacocoTestCoverageVerification"
                }
           }
           stage("Static code analysis") {
                steps {
-                    sh "./gradlew checkstyleMain"
+                    sh "cd Chapter08/sample1 && ./gradlew checkstyleMain"
                }
           }
 
 	  stage('Run Checkstyle') {
                steps {
                     // This command tells Jenkins to execute the Gradle checkstyle task
-                    sh './gradlew checkstyleTest' 
+                    sh 'cd Chapter08/sample1 && ./gradlew checkstyleTest' 
                }
           }
 
@@ -51,7 +51,7 @@ pipeline {
 
           stage("Package") {
                steps {
-                    sh "./gradlew build"
+                    sh "cd Chapter08/sample1 && ./gradlew build"
                }
           }
 
