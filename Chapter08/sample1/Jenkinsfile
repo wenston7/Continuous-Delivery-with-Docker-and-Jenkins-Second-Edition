@@ -1,114 +1,101 @@
+// =============================================================================
+//  Chapter 08 / sample1 - Continuous Delivery pipeline (assignment solution)
+//  Place this file at:  Chapter08/sample1/Jenkinsfile  in YOUR fork.
+// =============================================================================
+
 pipeline {
-     agent any
-     triggers {
-          pollSCM('* * * * *')
-     }
-     stages {
-          stage("Compile") {
-               steps {
-                    sh "cd Chapter08/sample1 && ./gradlew compileJava"
-               }
-          }
-          stage("Unit test") {
-               steps {
-                    sh "cd Chapter08/sample1 && ./gradlew test"
-               }
-          }
-          stage("Code coverage") {
-               steps {
-                    sh "cd Chapter08/sample1 && ./gradlew jacocoTestReport"
-                    sh "cd Chapter08/sample1 && ./gradlew jacocoTestCoverageVerification"
-               }
-          }
-          stage("Static code analysis") {
-               steps {
-                    sh "cd Chapter08/sample1 && ./gradlew checkstyleMain"
-               }
-          }
 
-	  stage('Run Checkstyle') {
-               steps {
-                    // This command tells Jenkins to execute the Gradle checkstyle task
-                    sh 'cd Chapter08/sample1 && ./gradlew checkstyleTest' 
-               }
-          }
+    // ---- REQUIREMENT: "The pipeline must run in an agent container." ----------
+    // The ENTIRE pipeline runs inside this Docker container, which Jenkins spins
+    // up per build. gradle:4.10.2-jdk8 gives us:
+    //   * Java 8        (this old Spring/Gradle project requires JDK 8)
+    //   * Gradle 4.10.2 (matches this project's wrapper)
+    //   * git           (needed for the SCM checkout that runs inside the agent)
+    agent {
+        docker {
+            image 'gradle:4.10.2-jdk8'
+        }
+    }
 
+    // ---- REQUIREMENT: "The pipeline must poll github." -----------------------
+    // Jenkins checks the repo every minute. A new commit on the tracked branch
+    // (e.g. when your PR is merged into master) starts a build automatically.
+    triggers {
+        pollSCM('* * * * *')
+    }
 
-	  stage('Publish Report') {
-               steps {
-                    // This uses the HTML Publisher plugin to make the report visible in Jenkins
-                    publishHTML(target: [
-                         allowMissing: false,
-                         alwaysLinkToLastBuild: true,
-                         keepAll: true,
-                         reportDir: 'build/reports/checkstyle', // Standard output folder for Gradle checkstyle
-                         reportFiles: 'test.html', 
-                         reportName: 'jacoco checkstyle' // Name required by your instructions
-                    ])
-               }
-          }
+    environment {
+        // Keep Gradle's cache inside the workspace so the container user can write
+        // to it. Without this you can hit "cannot create directory /.gradle".
+        GRADLE_USER_HOME = "${WORKSPACE}/.gradle"
+    }
 
+    stages {
 
-          stage("Package") {
-               steps {
-                    sh "cd Chapter08/sample1 && ./gradlew build"
-               }
-          }
+        // ---- ALWAYS RUN (the tests "from last week") -------------------------
+        stage('Compile') {
+            steps {
+                dir('Chapter08/sample1') {
+                    sh 'chmod +x gradlew && ./gradlew compileJava'
+                }
+            }
+        }
 
-          stage("Docker build") {
-               steps {
-                    sh "docker build -t leszko/calculator:${BUILD_TIMESTAMP} ."
-               }
-          }
+        stage('Unit test') {
+            steps {
+                dir('Chapter08/sample1') {
+                    sh './gradlew test'
+                }
+            }
+        }
 
-          stage("Docker login") {
-               steps {
-                    withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'docker-hub-credentials',
-                               usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
-                         sh "docker login --username $USERNAME --password $PASSWORD"
-                    }
-               }
-          }
+        // ---- REQUIREMENT: run ONLY when a *.java file was modified -----------
+        stage('Code coverage') {
+            when {
+                changeset '**/*.java'
+            }
+            steps {
+                dir('Chapter08/sample1') {
+                    sh './gradlew jacocoTestReport'
+                    sh './gradlew jacocoTestCoverageVerification'
+                }
+            }
+        }
 
-          stage("Docker push") {
-               steps {
-                    sh "docker push leszko/calculator:${BUILD_TIMESTAMP}"
-               }
-          }
+        // ---- REQUIREMENT: run ONLY when a *.java file was modified -----------
+        stage('Static code analysis') {
+            when {
+                changeset '**/*.java'
+            }
+            steps {
+                dir('Chapter08/sample1') {
+                    sh './gradlew checkstyleMain'
+                }
+            }
+        }
 
-          stage("Update version") {
-               steps {
-                    sh "sed  -i 's/{{VERSION}}/${BUILD_TIMESTAMP}/g' calculator.yaml"
-               }
-          }
-          
-          stage("Deploy to staging") {
-               steps {
-                    sh "kubectl config use-context staging"
-                    sh "kubectl apply -f hazelcast.yaml"
-                    sh "kubectl apply -f calculator.yaml"
-               }
-          }
+        // ---- ALWAYS RUN -----------------------------------------------------
+        // 'assemble' builds the jar WITHOUT re-running test/checkstyle, so the
+        // two conditional stages above stay the single source of truth for when
+        // checks run. (If your last-week solution used 'build' here, you may
+        // swap it back, but then checks run every time regardless of the
+        // conditional - 'assemble' keeps the behaviour clean.)
+        stage('Package') {
+            steps {
+                dir('Chapter08/sample1') {
+                    sh './gradlew assemble'
+                }
+            }
+        }
+    }
 
-          stage("Acceptance test") {
-               steps {
-                    sleep 60
-                    sh "chmod +x acceptance-test.sh && ./acceptance-test.sh"
-               }
-          }
-
-          stage("Release") {
-               steps {
-                    sh "kubectl config use-context production"
-                    sh "kubectl apply -f hazelcast.yaml"
-                    sh "kubectl apply -f calculator.yaml"
-               }
-          }
-          stage("Smoke test") {
-              steps {
-                  sleep 60
-                  sh "chmod +x smoke-test.sh && ./smoke-test.sh"
-              }
-          }
-     }
+    // ---- REQUIREMENT: echo the outcome --------------------------------------
+    post {
+        success {
+            echo 'pipeline ran perfectly'
+        }
+        failure {
+            echo 'pipeline failure'
+        }
+    }
 }
