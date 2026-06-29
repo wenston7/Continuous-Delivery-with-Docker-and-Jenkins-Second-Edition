@@ -1,53 +1,43 @@
 // =============================================================================
-//  Exercise 6 - MULTIBRANCH pipeline (Chapter 08 / sample1)
-//  Place at:  Chapter08/sample1/Jenkinsfile  in YOUR fork, on every branch you test.
+//  Exercise 6 - FALLBACK Jenkinsfile (use ONLY if the Docker Cloud gives trouble)
 //
-//  Branch rules (Exercise 6.1):
-//    * main                       -> run ALL stages, INCLUDING Code coverage
-//    * any branch with "feature"  -> run all stages EXCEPT Code coverage
-//    * anything else              -> FAIL the pipeline on purpose
-//
-//  Caching (Exercise 6.2):
-//    The agent comes from the Docker Cloud template, which mounts the named
-//    volume `gradle-cache` at /home/jenkins/.gradle. GRADLE_USER_HOME points there
-//    so Gradle's wrapper distribution + downloaded dependencies persist between
-//    runs -> the second run is faster.
+//  Same branch logic as the primary file, but instead of a Docker Cloud agent it
+//  uses the Docker Pipeline plugin (the same mechanism Exercise 5 used) and caches
+//  Gradle data by mounting the `gradle-cache` volume directly via `args`.
+//  Fewer moving parts than the Cloud, equally valid for "agents that cache gradle".
 // =============================================================================
 
 pipeline {
 
-    // Use an agent provisioned by the Docker Cloud (label set on the template).
     agent {
-        label 'gradle-agent'
+        docker {
+            image 'gradle:4.10.2-jdk8'
+            // -u root        : write freely to the mounted volume
+            // -v gradle-cache: persist Gradle's cache between runs (the caching part)
+            args '-u root -v gradle-cache:/home/gradle/.gradle'
+        }
     }
 
     environment {
-        // MUST equal the agent template's mount destination, or caching does nothing.
-        GRADLE_USER_HOME = '/home/jenkins/.gradle'
+        GRADLE_USER_HOME = '/home/gradle/.gradle'   // matches the volume mount above
     }
 
     stages {
 
-        // ---- Decide what this branch is allowed to do -----------------------
         stage('Branch gate') {
             steps {
                 script {
-                    // For a normal branch build BRANCH_NAME is the branch.
-                    // For a PR build, CHANGE_BRANCH is the source branch.
                     env.EFFECTIVE_BRANCH = env.CHANGE_BRANCH ?: env.BRANCH_NAME
                     echo "Effective branch = ${env.EFFECTIVE_BRANCH}"
-
                     boolean isMain    = (env.EFFECTIVE_BRANCH == 'main')
                     boolean isFeature = env.EFFECTIVE_BRANCH.contains('feature')
-
                     if (!isMain && !isFeature) {
-                        error("Branch '${env.EFFECTIVE_BRANCH}' is neither 'main' nor a 'feature' branch - failing as required by the assignment.")
+                        error("Branch '${env.EFFECTIVE_BRANCH}' is neither 'main' nor a 'feature' branch - failing as required.")
                     }
                 }
             }
         }
 
-        // ---- Always run (on main and feature branches) ----------------------
         stage('Compile') {
             steps { dir('Chapter08/sample1') { sh 'chmod +x gradlew && ./gradlew compileJava' } }
         }
@@ -60,11 +50,8 @@ pipeline {
             steps { dir('Chapter08/sample1') { sh './gradlew checkstyleMain' } }
         }
 
-        // ---- Code coverage: ONLY on main ------------------------------------
         stage('Code coverage') {
-            when {
-                expression { (env.CHANGE_BRANCH ?: env.BRANCH_NAME) == 'main' }
-            }
+            when { expression { (env.CHANGE_BRANCH ?: env.BRANCH_NAME) == 'main' } }
             steps {
                 dir('Chapter08/sample1') {
                     sh './gradlew jacocoTestReport'
@@ -73,9 +60,6 @@ pipeline {
             }
         }
 
-        // ---- Always run -----------------------------------------------------
-        // 'assemble' builds the jar without re-running test/checkstyle, so the
-        // conditional stages above stay the single source of truth.
         stage('Package') {
             steps { dir('Chapter08/sample1') { sh './gradlew assemble' } }
         }
