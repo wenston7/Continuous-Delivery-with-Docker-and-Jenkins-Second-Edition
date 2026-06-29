@@ -1,58 +1,69 @@
 // =============================================================================
-//  Chapter 08 / sample1 - Continuous Delivery pipeline (assignment solution)
-//  Place this file at:  Chapter08/sample1/Jenkinsfile  in YOUR fork.
+//  Exercise 6 - MULTIBRANCH pipeline (Chapter 08 / sample1)
+//  Place at:  Chapter08/sample1/Jenkinsfile  in YOUR fork, on every branch you test.
+//
+//  Branch rules (Exercise 6.1):
+//    * main                       -> run ALL stages, INCLUDING Code coverage
+//    * any branch with "feature"  -> run all stages EXCEPT Code coverage
+//    * anything else              -> FAIL the pipeline on purpose
+//
+//  Caching (Exercise 6.2):
+//    The agent comes from the Docker Cloud template, which mounts the named
+//    volume `gradle-cache` at /home/jenkins/.gradle. GRADLE_USER_HOME points there
+//    so Gradle's wrapper distribution + downloaded dependencies persist between
+//    runs -> the second run is faster.
 // =============================================================================
 
 pipeline {
 
-    // ---- REQUIREMENT: "The pipeline must run in an agent container." ----------
-    // The ENTIRE pipeline runs inside this Docker container, which Jenkins spins
-    // up per build. gradle:4.10.2-jdk8 gives us:
-    //   * Java 8        (this old Spring/Gradle project requires JDK 8)
-    //   * Gradle 4.10.2 (matches this project's wrapper)
-    //   * git           (needed for the SCM checkout that runs inside the agent)
+    // Use an agent provisioned by the Docker Cloud (label set on the template).
     agent {
-        docker {
-            image 'gradle:4.10.2-jdk8'
-        }
-    }
-
-    // ---- REQUIREMENT: "The pipeline must poll github." -----------------------
-    // Jenkins checks the repo every minute. A new commit on the tracked branch
-    // (e.g. when your PR is merged into master) starts a build automatically.
-    triggers {
-        pollSCM('* * * * *')
+        label 'gradle-agent'
     }
 
     environment {
-        // Keep Gradle's cache inside the workspace so the container user can write
-        // to it. Without this you can hit "cannot create directory /.gradle".
-        GRADLE_USER_HOME = "${WORKSPACE}/.gradle"
+        // MUST equal the agent template's mount destination, or caching does nothing.
+        GRADLE_USER_HOME = '/home/jenkins/.gradle'
     }
 
     stages {
 
-        // ---- ALWAYS RUN (the tests "from last week") -------------------------
-        stage('Compile') {
+        // ---- Decide what this branch is allowed to do -----------------------
+        stage('Branch gate') {
             steps {
-                dir('Chapter08/sample1') {
-                    sh 'chmod +x gradlew && ./gradlew compileJava'
+                script {
+                    // For a normal branch build BRANCH_NAME is the branch.
+                    // For a PR build, CHANGE_BRANCH is the source branch.
+                    env.EFFECTIVE_BRANCH = env.CHANGE_BRANCH ?: env.BRANCH_NAME
+                    echo "Effective branch = ${env.EFFECTIVE_BRANCH}"
+
+                    boolean isMain    = (env.EFFECTIVE_BRANCH == 'main')
+                    boolean isFeature = env.EFFECTIVE_BRANCH.contains('feature')
+
+                    if (!isMain && !isFeature) {
+                        error("Branch '${env.EFFECTIVE_BRANCH}' is neither 'main' nor a 'feature' branch - failing as required by the assignment.")
+                    }
                 }
             }
+        }
+
+        // ---- Always run (on main and feature branches) ----------------------
+        stage('Compile') {
+            steps { dir('Chapter08/sample1') { sh 'chmod +x gradlew && ./gradlew compileJava' } }
         }
 
         stage('Unit test') {
-            steps {
-                dir('Chapter08/sample1') {
-                    sh './gradlew test'
-                }
-            }
+            steps { dir('Chapter08/sample1') { sh './gradlew test' } }
         }
 
-        // ---- REQUIREMENT: run ONLY when a *.java file was modified -----------
+        stage('Static code analysis') {
+            steps { dir('Chapter08/sample1') { sh './gradlew checkstyleMain' } }
+        }
+
+        // ---- Code coverage: ONLY on main ------------------------------------
         stage('Code coverage') {
             when {
-                changeset '**/*.java'
+                expression { (env.CHANGE_BRANCH ?: env.BRANCH_NAME) == 'main' }
             }
             steps {
                 dir('Chapter08/sample1') {
@@ -62,40 +73,16 @@ pipeline {
             }
         }
 
-        // ---- REQUIREMENT: run ONLY when a *.java file was modified -----------
-        stage('Static code analysis') {
-            when {
-                changeset '**/*.java'
-            }
-            steps {
-                dir('Chapter08/sample1') {
-                    sh './gradlew checkstyleMain'
-                }
-            }
-        }
-
-        // ---- ALWAYS RUN -----------------------------------------------------
-        // 'assemble' builds the jar WITHOUT re-running test/checkstyle, so the
-        // two conditional stages above stay the single source of truth for when
-        // checks run. (If your last-week solution used 'build' here, you may
-        // swap it back, but then checks run every time regardless of the
-        // conditional - 'assemble' keeps the behaviour clean.)
+        // ---- Always run -----------------------------------------------------
+        // 'assemble' builds the jar without re-running test/checkstyle, so the
+        // conditional stages above stay the single source of truth.
         stage('Package') {
-            steps {
-                dir('Chapter08/sample1') {
-                    sh './gradlew assemble'
-                }
-            }
+            steps { dir('Chapter08/sample1') { sh './gradlew assemble' } }
         }
     }
 
-    // ---- REQUIREMENT: echo the outcome --------------------------------------
     post {
-        success {
-            echo 'pipeline ran perfectly'
-        }
-        failure {
-            echo 'pipeline failure'
-        }
+        success { echo 'pipeline ran perfectly' }
+        failure { echo 'pipeline failure' }
     }
 }
